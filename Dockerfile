@@ -3,10 +3,9 @@ WORKDIR /app
 RUN apt update && apt install -y cmake 
 RUN update-ca-certificates
 
-# Create appuser
+# CREATE UNPRIVILEGED USER 
 ENV USER=app
 ENV UID=10001
-
 RUN adduser \
     --disabled-password \
     --gecos "" \
@@ -15,15 +14,16 @@ RUN adduser \
     --no-create-home \
     --uid "${UID}" \
     "${USER}"
+
+# BUILD APP
 COPY . .
 RUN cargo build --release
 
-# final image
+# BUILD FINAL IMAGE 
 FROM debian:bullseye-slim
 WORKDIR /app
 COPY --from=builder /etc/passwd /etc/passwd
 COPY --from=builder /etc/group /etc/group
 COPY --from=builder /app/target/release/kafkaconsumer .
-# use unprivileged user
 USER app:app
-#COPY --from=0 /app .
+
