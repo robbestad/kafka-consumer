@@ -23,7 +23,7 @@ FROM debian:bullseye-slim
 WORKDIR /app
 COPY --from=builder /etc/passwd /etc/passwd
 COPY --from=builder /etc/group /etc/group
-COPY --from=builder /app/target/release/consumetx .
+COPY --from=builder /app/target/release/kafkaconsumer .
 # use unprivileged user
 USER app:app
 #COPY --from=0 /app .
