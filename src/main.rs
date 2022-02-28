@@ -1,7 +1,7 @@
 use clap::{Command, Arg};
 use log::{error, info};
 
-use rdkafka::{Message, client::ClientContext, consumer::CommitMode, message::{BorrowedMessage, Headers}};
+use rdkafka::{Message, client::ClientContext, consumer::CommitMode, message::{BorrowedMessage}};
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::{Consumer, ConsumerContext, Rebalance};
 use rdkafka::consumer::stream_consumer::StreamConsumer;
@@ -64,7 +64,7 @@ impl ConsumerContext for LoggingContext {
     }
 
     fn commit_callback(&self, result: KafkaResult<()>, _: &TopicPartitionList) {
-        info!("Commiting offsets: {:?}", result);
+        //info!("Commiting offsets: {:?}", result);
     }
 }
 
@@ -80,12 +80,14 @@ async fn consume(brokers: &str, group_id: &str, topics: &[&str]) {
         .subscribe(topics)
         .expect(&format!("Failed to subscribe to topics {:?}", topics));
 
+		let mut txs:Vec<(i64,i64)>=Vec::with_capacity(10);
+
     loop {
         let r = consumer.recv().await;
         match r {
             Err(e) => error!("Kafka error: {}", e),
             Ok(m) => {
-                process_msg(&m);
+                process_msg(&m,&mut txs);
                 consumer.commit_message(&m, CommitMode::Async).unwrap();
             }
         }
@@ -93,7 +95,26 @@ async fn consume(brokers: &str, group_id: &str, topics: &[&str]) {
 
 }
 
-fn process_msg(msg: &BorrowedMessage) {
+fn tps(v:&Vec<(i64,i64)>)->i64{
+	let mut prev=-1;
+let mut prevdt=-1;
+let mut diffs:Vec<i64>=Vec::with_capacity(10); 
+let mut sum=0;
+for r in v{
+	let (tx,tm) = r;
+  if prev != -1 {
+	      let diff = tx - prev;
+	      let dvdr= (tm-prevdt)/1000;
+	      diffs.push(diff/dvdr);
+	      sum = sum + diff/dvdr;
+  }
+  prev = *tx;
+  prevdt = *tm;
+}
+sum/diffs.len() as i64
+}
+
+fn process_msg(msg: &BorrowedMessage, txs: &mut Vec<(i64,i64)>) {
     let payload = match msg.payload_view::<str>() {
         None => "",
         Some(Ok(s)) => s,
@@ -102,17 +123,19 @@ fn process_msg(msg: &BorrowedMessage) {
             ""
         }
     };
-
-    info!("key: '{:?}', payload: '{}', topic: {}, partition: {}, offset: {}, timestamp: {:?}",
-        msg.key(), payload, msg.topic(), msg.partition(), msg.offset(), msg.timestamp());
-    info!("msg: {:?}", msg);
-
-    if let Some(headers) = msg.headers() {
-        for i in 0..headers.count() {
-            let header = headers.get(i).unwrap();
-            let header_key = header.0;
-            let header_value = std::str::from_utf8(header.1).unwrap();
-            info!("  Header '{}' : '{}'", header_key, header_value);
-        }
+    info!("{},{}",payload.parse::<i64>().unwrap(), msg.timestamp().to_millis().unwrap());
+    let tx = payload.parse::<i64>().unwrap();
+    if txs.len() > 9{
+    	txs.remove(0);
     }
+    txs.push((tx,msg.timestamp().to_millis().unwrap()));
+    if txs.len() > 9{
+    	//info!("\n-----------\n");
+      //info!("{:#?}",txs);
+
+	    let real_tps = tps(txs);
+    	info!("TPS: {:#?}",real_tps);
+    }
+
+    
 }
