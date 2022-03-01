@@ -1,3 +1,4 @@
+mod tps;
 fn main(){
 let v:Vec<(i64,i64)> = vec![
         (
@@ -43,27 +44,16 @@ let v:Vec<(i64,i64)> = vec![
     ];
 
 
-let mut prev=0;
-let mut prevdt=0;
-let mut diffs:Vec<i64>=Vec::with_capacity(10); 
-let mut sum=0;
-for r in &v{
-	let (tx,tm) = r;
-	println!("{} {}",tx,tm);
-  if prev != -1 {
-	      let diff = tx - prev;
-	println!("tx:{} prev:{} diff:{}",tx,prev,diff);
-	      let dvdr= (tm-prevdt)/1000;
-	println!("tm:{} prevdt:{} dvdr:{}",tm,prevdt,dvdr);
-	      diffs.push(diff/dvdr);
-	println!("diff:{} dvdr:{} res:{}",diff,dvdr,diff/dvdr);
-
-	      sum = sum + diff/dvdr;
-  }
-  prev = *tx;
-  prevdt = *tm;
-}
-println!("Avg TPS... {}, {:?}",sum,sum/diffs.len() as i64)
+println!("Avg TPS... {:?}",sum)
 }
 
 
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn it_works() {
+    	let sum = tps::calc(&v);
+
+        assert_eq!(2 + 2, 4);
+    }
+}

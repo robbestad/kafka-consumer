@@ -1,13 +1,13 @@
 use clap::{Command, Arg};
 use log::{error, info};
+mod tps;
 
 use rdkafka::{Message, client::ClientContext, consumer::CommitMode, message::{BorrowedMessage}};
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::{Consumer, ConsumerContext, Rebalance};
 use rdkafka::consumer::stream_consumer::StreamConsumer;
-use rdkafka::error::KafkaResult;
-use rdkafka::topic_partition_list::{TopicPartitionList};
 use rdkafka::util::get_rdkafka_version;
+use rdkafka::producer::{FutureProducer, FutureRecord};
 
 #[tokio::main]
 async fn main() {
@@ -37,6 +37,14 @@ async fn main() {
             .env("GROUP_ID")
             .default_value("gid")
         )
+        .arg(
+            Arg::new("destination")
+                .short('d')
+                .long("destination")
+                .help("Destination topic")
+                .takes_value(true)
+                .required(true),
+        )
         .get_matches();
 
     let (ver_n, ver_s) = get_rdkafka_version();
@@ -45,9 +53,16 @@ async fn main() {
     let brokers = args.value_of("brokers").unwrap();
     let topics: Vec<&str> = args.values_of("topics").unwrap().collect();
     let group_id = args.value_of("group-id").unwrap();
+    let destination = args.value_of("destination").unwrap();
 
-    info!("Starting to consume");
-    consume(brokers, group_id, &topics).await;
+    info!("Starting to consume & produce");
+    let producer: &FutureProducer = &ClientConfig::new()
+        .set("bootstrap.servers", brokers)
+        .set("message.timeout.ms", "5000")
+        .create()
+        .expect("Producer creation error");
+        
+    consume(brokers, group_id, &topics, destination, producer).await;
 }
 
 struct LoggingContext;
@@ -58,17 +73,14 @@ impl ConsumerContext for LoggingContext {
     fn pre_rebalance(&self, rebalance: &Rebalance) {
         info!("Pre rebalance {:?}", rebalance);
     }
-
     fn post_rebalance(&self, rebalance: &Rebalance) {
         info!("Post rebalance {:?}", rebalance);
     }
-
-    fn commit_callback(&self, result: KafkaResult<()>, _: &TopicPartitionList) {
-        //info!("Commiting offsets: {:?}", result);
-    }
 }
 
-async fn consume(brokers: &str, group_id: &str, topics: &[&str]) {
+
+
+async fn consume(brokers: &str, group_id: &str, topics: &[&str], destination: &str, producer: &FutureProducer) {
     let consumer: StreamConsumer<LoggingContext> = ClientConfig::new()
         .set("group.id", group_id)
         .set("bootstrap.servers", brokers)
@@ -87,7 +99,7 @@ async fn consume(brokers: &str, group_id: &str, topics: &[&str]) {
         match r {
             Err(e) => error!("Kafka error: {}", e),
             Ok(m) => {
-                process_msg(&m,&mut txs);
+                process_msg(&m,&mut txs,&destination,&producer);
                 consumer.commit_message(&m, CommitMode::Async).unwrap();
             }
         }
@@ -95,26 +107,7 @@ async fn consume(brokers: &str, group_id: &str, topics: &[&str]) {
 
 }
 
-fn tps(v:&Vec<(i64,i64)>)->i64{
-	let mut prev=-1;
-let mut prevdt=-1;
-let mut diffs:Vec<i64>=Vec::with_capacity(10); 
-let mut sum=0;
-for r in v{
-	let (tx,tm) = r;
-  if prev != -1 {
-	      let diff = tx - prev;
-	      let dvdr= (tm-prevdt)/1000;
-	      diffs.push(diff/dvdr);
-	      sum = sum + diff/dvdr;
-  }
-  prev = *tx;
-  prevdt = *tm;
-}
-sum/diffs.len() as i64
-}
-
-fn process_msg(msg: &BorrowedMessage, txs: &mut Vec<(i64,i64)>) {
+fn process_msg(msg: &BorrowedMessage, txs: &mut Vec<(i64,i64)>,destination:&str,producer:&FutureProducer) {
     let payload = match msg.payload_view::<str>() {
         None => "",
         Some(Ok(s)) => s,
@@ -123,7 +116,6 @@ fn process_msg(msg: &BorrowedMessage, txs: &mut Vec<(i64,i64)>) {
             ""
         }
     };
-    info!("{},{}",payload.parse::<i64>().unwrap(), msg.timestamp().to_millis().unwrap());
     let tx = payload.parse::<i64>().unwrap();
     if txs.len() > 9{
     	txs.remove(0);
@@ -132,10 +124,16 @@ fn process_msg(msg: &BorrowedMessage, txs: &mut Vec<(i64,i64)>) {
     if txs.len() > 9{
     	//info!("\n-----------\n");
       //info!("{:#?}",txs);
-
-	    let real_tps = tps(txs);
-    	info!("TPS: {:#?}",real_tps);
-    }
+	    let real_tps = tps::calc(txs);
+    	//info!("TPS: {:#?}, producing to {}",real_tps,destination);
+    	let key = msg.timestamp().to_millis().unwrap().to_string();
+      producer.send_result(
+          FutureRecord::to(destination)
+              .payload(&real_tps.to_string())
+              .key(&key),
+      ).map_err(|err| println!("{:?}", err)).ok();
+      
+    };
 
     
 }
